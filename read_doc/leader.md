@@ -1,64 +1,52 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+# 选主
+
+作业启动时,执行选主流程
+![start-job](start-job.png)
+
+## 选主流程的实现 LeaderService
+
+executeInLeader: 通过分布式锁的方式, 选择出一个节点执行  `callback()`, 分布式锁节点为：`{jobName }/leader/election/latch`
+
+```java
+    /**
+ * Elect leader.
+ * 选主逻辑
  */
+public void electLeader() {
+    log.debug("Elect a new leader now.");
+    jobNodeStorage.executeInLeader(LeaderNode.LATCH, new LeaderElectionExecutionCallback());
+    log.debug("Leader election completed.");
+}
 
-package org.apache.shardingsphere.elasticjob.kernel.internal.election;
+```
 
-import org.apache.shardingsphere.elasticjob.kernel.internal.sharding.JobInstance;
-import org.apache.shardingsphere.elasticjob.kernel.internal.listener.AbstractListenerManager;
-import org.apache.shardingsphere.elasticjob.kernel.internal.schedule.JobRegistry;
-import org.apache.shardingsphere.elasticjob.kernel.internal.server.ServerNode;
-import org.apache.shardingsphere.elasticjob.kernel.internal.server.ServerService;
-import org.apache.shardingsphere.elasticjob.kernel.internal.server.ServerStatus;
-import org.apache.shardingsphere.elasticjob.reg.base.CoordinatorRegistryCenter;
-import org.apache.shardingsphere.elasticjob.reg.listener.DataChangedEvent;
-import org.apache.shardingsphere.elasticjob.reg.listener.DataChangedEvent.Type;
-import org.apache.shardingsphere.elasticjob.reg.listener.DataChangedEventListener;
+LeaderElectionExecutionCallback:
 
-import java.util.Objects;
+```java
 
-/**
- * Election listener manager.
- */
-public final class ElectionListenerManager extends AbstractListenerManager {
-    
-    private final String jobName;
-    
-    private final LeaderNode leaderNode;
-    
-    private final ServerNode serverNode;
-    
-    private final LeaderService leaderService;
-    
-    private final ServerService serverService;
-    
-    public ElectionListenerManager(final CoordinatorRegistryCenter regCenter, final String jobName) {
-        super(regCenter, jobName);
-        this.jobName = jobName;
-        leaderNode = new LeaderNode(jobName);
-        serverNode = new ServerNode(jobName);
-        leaderService = new LeaderService(regCenter, jobName);
-        serverService = new ServerService(regCenter, jobName);
-    }
-    
+@RequiredArgsConstructor
+class LeaderElectionExecutionCallback implements LeaderExecutionCallback {
+
     @Override
-    public void start() {
-        addDataListener(new LeaderElectionJobListener());
-        addDataListener(new LeaderAbdicationJobListener());
+    public void execute() {
+        // 判断主节点是否已存在
+        if (!hasLeader()) {
+            // 创建一个临时节点: `{jobName}/leader/election/instance`, value = instance_id
+            jobNodeStorage.fillEphemeralJobNode(LeaderNode.INSTANCE,
+                    JobRegistry.getInstance().getJobInstance(jobName).getJobInstanceId());
+        }
     }
+}
+```
+
+作业主节点的选举过程比较简单， 就是争抢分布式锁的过程, 谁先抢到分布式锁, 谁就是可以升级为主节点.
+![leader-flow](leader-flow.png)
+
+## 监听器
+
+## LeaderElectionJobListener
+
+```java
 
     /**
      * 主要是当主节点宕机后触发重新选主监听器。
@@ -109,7 +97,13 @@ public final class ElectionListenerManager extends AbstractListenerManager {
         private boolean isLocalServerEnabled(final String path, final String data) {
             return serverNode.isLocalServerPath(path) && !ServerStatus.DISABLED.name().equals(data);
         }
-    }
+    } 
+```
+
+
+## LeaderAbdicationJobListener
+
+```java
 
     /**
      * 主节点退位监听器.
@@ -128,4 +122,7 @@ public final class ElectionListenerManager extends AbstractListenerManager {
             return serverNode.isLocalServerPath(path) && ServerStatus.DISABLED.name().equals(data);
         }
     }
-}
+```
+
+当在控制台将leader 节点置为 disabled,此时将主节点信息移除(`{jobName}/leader/election/instance`), 并再次触发选主
+

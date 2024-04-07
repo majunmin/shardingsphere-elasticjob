@@ -46,9 +46,11 @@ public final class LeaderService {
     
     /**
      * Elect leader.
+     * 选主逻辑
      */
     public void electLeader() {
         log.debug("Elect a new leader now.");
+        // 分布式锁节点为: `{jobName}/leader/election/latch`
         jobNodeStorage.executeInLeader(LeaderNode.LATCH, new LeaderElectionExecutionCallback());
         log.debug("Leader election completed.");
     }
@@ -84,6 +86,7 @@ public final class LeaderService {
     
     /**
      * Judge has leader or not in current time.
+     * `{jobName}/leader/election/instance`
      * 
      * @return has leader or not in current time
      */
@@ -103,8 +106,11 @@ public final class LeaderService {
         
         @Override
         public void execute() {
+            // 判断主节点是否已存在
             if (!hasLeader()) {
-                jobNodeStorage.fillEphemeralJobNode(LeaderNode.INSTANCE, JobRegistry.getInstance().getJobInstance(jobName).getJobInstanceId());
+                // 创建一个临时节点: `{jobName}/leader/election/instance`, value = instance_id
+                jobNodeStorage.fillEphemeralJobNode(LeaderNode.INSTANCE,
+                        JobRegistry.getInstance().getJobInstance(jobName).getJobInstanceId());
             }
         }
     }
